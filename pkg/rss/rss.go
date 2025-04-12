@@ -5,7 +5,6 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
-	"github.com/jftuga/geodist"
 )
 
 type Rideservice struct {
@@ -13,6 +12,8 @@ type Rideservice struct {
 	Rides      map[int]*Ride
 	Drivers    map[int]*Driver
 	Ride       chan *Ride
+	FS         FareStrategy
+	observers  []Observer
 	mu         sync.Mutex
 }
 
@@ -53,9 +54,10 @@ func (r *Rideservice) RequestRide(pId int, start, end *Location, status RideStat
 		RideStatus: status,
 		RideType:   rtype,
 	}
-	r.Ride <- ride
-	// go routine and notify  to driver
+	r.Rides[ride.ID] = ride
 
+	// go routine and notify  to driver
+	r.Ride <- ride
 	return ride
 
 }
@@ -69,6 +71,7 @@ func (r *Rideservice) AcceptRide(dId, rId int) bool {
 	ride.RideStatus = Accepted
 	driver.Status = Busy
 	ride.Driver = driver
+	r.NotifyObservers(ride)
 	return true
 
 }
@@ -90,7 +93,7 @@ func (r *Rideservice) CompleteRide(rId int) bool {
 	fmt.Println("Payment processed.")
 
 	ride.Driver.Status = Available
-
+	r.NotifyObservers(ride)
 	return true
 }
 
@@ -108,29 +111,9 @@ func (r *Rideservice) processRideRequests() bool {
 		r.mu.Lock()
 		r.Rides[ride.ID] = ride
 		r.mu.Unlock()
-		r.NotifyDriver(ride)
+		r.NotifyObservers(ride)
 	}
 	return true
-}
-func (r *Rideservice) NotifyDriver(ride *Ride) {
-
-	// Notify the driver about the ride request
-
-	for _, driver := range r.Drivers {
-		if driver.Status == Available && r.CalculateDistance(driver.Location, ride.From) < 5.0 {
-			// Notify the driver about the ride request
-			// This could be a push notification, SMS, etc.
-			// For simplicity, we'll just print it to the console
-			println("Notifying driver:", driver.Name, "about ride request from", ride.Passenger.Name)
-			break
-		}
-	}
-}
-func (r *Rideservice) CalculateDistance(loc1, loc2 *Location) float64 {
-	loc1Coord := geodist.Coord{Lat: loc1.Lattitude, Lon: loc1.Longitude}
-	loc2Coord := geodist.Coord{Lat: loc2.Lattitude, Lon: loc2.Longitude}
-	dist, _ := geodist.HaversineDistance(loc1Coord, loc2Coord)
-	return dist
 }
 
 func (r *Rideservice) CalculateFare(rId int) (bool, float64) {
@@ -139,15 +122,11 @@ func (r *Rideservice) CalculateFare(rId int) (bool, float64) {
 		return false, 0.0
 	}
 	fmt.Println("Calculating fare for ride ID:", rId)
-	distance := r.CalculateDistance(ride.From, ride.To)
+	distance := CalculateDistance(ride.From, ride.To)
 	fmt.Println("Distance calculated:", distance)
-	// Assuming a fare rate of $1 per kilometer
-	fare := 0.0
-	if ride.RideType == Regular {
-		fare = distance * 1.0
-	} else if ride.RideType == Premium {
-		fare = distance * 1.5
-	}
+	stg := NewFareStrategy(ride.RideType)
+	fare := stg.CalculateFare(distance)
+	fmt.Println("Fare calculated:", fare)
 	fmt.Println("Distance:", distance, "Fare:", fare)
 	return true, fare
 }
@@ -155,4 +134,23 @@ func (r *Rideservice) CalculateFare(rId int) (bool, float64) {
 func (r *Rideservice) ProcessPayment(amount float64) bool {
 	println("Processing payment of $", amount)
 	return true
+}
+
+func (r *Rideservice) RegisterObserver(observer Observer) {
+	r.observers = append(r.observers, observer)
+}
+func (r *Rideservice) RemoveObserver(observer Observer) {
+	for i, o := range r.observers {
+		if o == observer {
+			r.observers = append(r.observers[:i], r.observers[i+1:]...)
+			break
+		}
+	}
+}
+func (r *Rideservice) NotifyObservers(ride *Ride) {
+	fmt.Println("Notify")
+	for _, observer := range r.observers {
+		fmt.Printf("Notifying observer: %T\n", observer)
+		observer.Update(ride)
+	}
 }
