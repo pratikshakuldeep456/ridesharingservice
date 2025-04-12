@@ -7,6 +7,7 @@ type Ride struct {
 	From       *Location
 	To         *Location
 	RideStatus RideStatus
+	RideType   RideType
 }
 
 func NewRide(r *Ride) *Ride {
